@@ -1,0 +1,234 @@
+"""Backblaze B2 persistence for the hosted Apktool MCP.
+
+Credentials are provided exclusively by Render environment variables.
+Every stored object gets a unique name to avoid chargeable hidden versions.
+"""
+from __future__ import annotations
+
+import os
+import re
+import secrets
+import tarfile
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+import boto3
+from boto3.s3.transfer import TransferConfig
+from botocore.config import Config
+
+BASE_PREFIX = "apktool/"
+SOFT_LIMIT_BYTES = 9_000_000_000
+UPLOAD_LIMIT_BYTES = 512_000_000
+PROJECT_LIMIT_BYTES = 2_000_000_000
+PART_SIZE = 8 * 1024 * 1024
+TRANSFER = TransferConfig(
+    multipart_threshold=PART_SIZE,
+    multipart_chunksize=PART_SIZE,
+    max_concurrency=1,
+    use_threads=False,
+)
+
+
+def enabled() -> bool:
+    return all(os.environ.get(key) for key in (
+        "B2_BUCKET", "B2_S3_ENDPOINT", "B2_KEY_ID", "B2_APPLICATION_KEY"
+    ))
+
+
+def settings():
+    names = ("B2_BUCKET", "B2_S3_ENDPOINT", "B2_KEY_ID", "B2_APPLICATION_KEY")
+    absent = [k for k in names if not os.environ.get(k)]
+    if absent:
+        raise RuntimeError("B2 not configured; set these Render environment variables: " + ", ".join(absent))
+    endpoint = os.environ["B2_S3_ENDPOINT"].rstrip("/")
+    m = re.fullmatch(r"https://s3\.([a-z0-9-]+)\.backblazeb2\.com", endpoint)
+    if not m:
+        raise ValueError("B2_S3_ENDPOINT must look like https://s3.us-west-004.backblazeb2.com")
+    bucket = os.environ["B2_BUCKET"]
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]", bucket):
+        raise ValueError("Invalid B2 bucket name")
+    return bucket, endpoint, m.group(1)
+
+
+def client():
+    bucket, endpoint, region = settings()
+    return boto3.client(
+        "s3", endpoint_url=endpoint, region_name=region,
+        aws_access_key_id=os.environ["B2_KEY_ID"],
+        aws_secret_access_key=os.environ["B2_APPLICATION_KEY"],
+        config=Config(signature_version="s3v4",
+                      s3={"addressing_style": "path"},
+                      max_pool_connections=2,
+                      retries={"max_attempts": 3, "mode": "standard"},
+                      connect_timeout=15, read_timeout=120),
+    )
+
+
+def _workspace() -> Path:
+    path = Path(os.environ.get("APKTOOL_WORKSPACE", "/tmp/apktool-mcp-workspace")).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _local(path: str, is_dir: bool = False) -> Path:
+    p = Path(path).resolve()
+    if not p.is_relative_to(_workspace()) or (not p.is_dir() if is_dir else not p.is_file()):
+        raise ValueError("Path must be an existing file or project inside APKTool workspace")
+    return p
+
+
+def _safe_key(key: str) -> str:
+    if not (key.startswith(BASE_PREFIX) and
+            re.fullmatch(r"[a-zA-Z0-9._/\-]+", key) and
+            ".." not in key.split("/") and
+            len(key) < 1000):
+        raise ValueError("Invalid storage key; must be a key returned by the B2 tools")
+    return key
+
+
+def _inventory(s3, bucket):
+    total = count = 0
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=BASE_PREFIX):
+        for obj in page.get("Contents", []):
+            count += 1
+            total += obj["Size"]
+    return total, count
+
+
+def status() -> dict:
+    if not enabled():
+        return {"configured": False,
+                "missing": [k for k in ("B2_BUCKET", "B2_S3_ENDPOINT", "B2_KEY_ID", "B2_APPLICATION_KEY") if not os.environ.get(k)],
+                "limit_bytes": SOFT_LIMIT_BYTES}
+    bucket, _, region = settings()
+    total, count = _inventory(client(), bucket)
+    return {"configured": True, "bucket": bucket, "region": region,
+            "prefix": BASE_PREFIX, "object_count": count,
+            "used_bytes": total, "limit_bytes": SOFT_LIMIT_BYTES,
+            "remaining_bytes": max(0, SOFT_LIMIT_BYTES - total),
+            "note": "The ceiling applies to current objects under apktool/, not all account usage or hidden versions. Backblaze billing safeguards must be configured separately."}
+
+
+def _validate_capacity(s3, bucket, size: int):
+    total, _ = _inventory(s3, bucket)
+    if total + size > SOFT_LIMIT_BYTES:
+        raise ValueError(
+            f"Apktool B2 quota would be exceeded: {total} stored bytes + {size} new bytes > {SOFT_LIMIT_BYTES}. Clean up stored files before uploading."
+        )
+
+
+def _object_key(kind: str, filename: str) -> str:
+    if kind not in ("originals", "projects", "outputs"):
+        raise ValueError("Unsupported artifact kind")
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename)[:90].strip(".") or "artifact"
+    return f"{BASE_PREFIX}{kind}/{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{secrets.token_hex(8)}-{safe_name}"
+
+
+def save_file(path: str, kind: str = "outputs") -> dict:
+    file = _local(path)
+    max_size = PROJECT_LIMIT_BYTES if kind == "projects" else UPLOAD_LIMIT_BYTES
+    size = file.stat().st_size
+    if not 0 < size <= max_size:
+        raise ValueError(f"File size must be between 1 and {max_size} bytes")
+    s3 = client()
+    bucket, _, _ = settings()
+    _validate_capacity(s3, bucket, size)
+    key = _object_key(kind, file.name)
+    s3.upload_file(str(file), bucket, key, ExtraArgs={"ContentType": "application/octet-stream"}, Config=TRANSFER)
+    return {"saved": True, "object_key": key, "bytes": size,
+            "note": "Unique object keys avoid hidden previous versions on normal uploads."}
+
+
+def list_saved(limit: int = 50, kind: str = "") -> dict:
+    if kind and kind not in ("originals", "projects", "outputs"):
+        raise ValueError("kind must be originals, projects, outputs or empty")
+    limit = max(1, min(limit, 100))
+    s3 = client()
+    bucket, _, _ = settings()
+    prefix = BASE_PREFIX + (kind + "/" if kind else "")
+    items = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            items.append({"key": obj["Key"], "bytes": obj["Size"], "modified": obj["LastModified"].isoformat()})
+    items.sort(key=lambda o: o["modified"], reverse=True)
+    return {"items": items[:limit], "total_count": len(items),
+            "note": "Call restore_saved_file or restore_project_snapshot to access older files."}
+
+
+def restore_file(key: str) -> dict:
+    key = _safe_key(key)
+    if "/projects/" in key:
+        raise ValueError("Project snapshot must be restored with restore_project_snapshot")
+    s3 = client()
+    bucket, _, _ = settings()
+    obj = s3.head_object(Bucket=bucket, Key=key)
+    if obj["ContentLength"] > UPLOAD_LIMIT_BYTES:
+        raise ValueError("Stored artifact is too large for a normal file restore")
+    folder = _workspace() / "restored"
+    folder.mkdir(parents=True, exist_ok=True)
+    name = key.rsplit("/", 1)[-1].split("-", 2)[-1]
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)[:90] or "artifact.bin"
+    out = folder / (secrets.token_hex(8) + "-" + name)
+    s3.download_file(bucket, key, str(out), Config=TRANSFER)
+    return {"restored": True, "file_path": str(out), "bytes": out.stat().st_size}
+
+
+def save_project(project_dir: str) -> dict:
+    directory = _local(project_dir, is_dir=True)
+    if not (directory / "apktool.yml").is_file():
+        raise ValueError("Not an APKTool project (apktool.yml missing)")
+    folder = _workspace() / "snapshots"
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / (secrets.token_hex(10) + ".tar.gz")
+    try:
+        with tarfile.open(out, "w:gz", compresslevel=1, dereference=False) as archive:
+            archive.add(directory, arcname=directory.name, recursive=True)
+        return {**save_file(str(out), "projects"), "project": directory.name,
+                "note": "Snapshot saved to B2. Restore it after Render sleeps or restarts."}
+    finally:
+        out.unlink(missing_ok=True)
+
+
+def restore_project(key: str) -> dict:
+    key = _safe_key(key)
+    if not key.startswith(BASE_PREFIX + "projects/") or not key.endswith(".tar.gz"):
+        raise ValueError("Not a project snapshot key")
+    s3 = client()
+    bucket, _, _ = settings()
+    obj = s3.head_object(Bucket=bucket, Key=key)
+    if obj["ContentLength"] > PROJECT_LIMIT_BYTES:
+        raise ValueError("Snapshot exceeds 2 GB")
+    folder = _workspace() / "snapshots"
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / (secrets.token_hex(12) + ".tar.gz")
+    destination = _workspace() / ("restored-" + secrets.token_hex(8))
+    try:
+        s3.download_file(bucket, key, str(tmp), Config=TRANSFER)
+        with tarfile.open(tmp, "r:gz") as archive:
+            members = archive.getmembers()
+            total = sum(m.size for m in members if m.isfile())
+            if total > 4_000_000_000 or len(members) > 250_000:
+                raise ValueError("Decompressed project exceeds safety limits")
+            destination.mkdir()
+            archive.extractall(destination, filter="data")
+        roots = [p for p in destination.iterdir() if p.is_dir() and (p / "apktool.yml").is_file()]
+        if len(roots) != 1:
+            raise ValueError("Snapshot does not contain exactly one APKTool project")
+        return {"restored": True, "project_dir": str(roots[0]),
+                "note": "Use this path with APKTool inspect, modify, and build tools."}
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def presigned_download(key: str, expires: int = 3600) -> dict:
+    key = _safe_key(key)
+    bucket, _, _ = settings()
+    expires = max(60, min(int(expires), 3600))
+    url = client().generate_presigned_url(
+        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires,
+        HttpMethod="GET",
+    )
+    return {"download_url": url, "expires_in_seconds": expires,
+            "note": "Anyone possessing this temporary URL can download the private object."}
