@@ -232,3 +232,43 @@ def presigned_download(key: str, expires: int = 3600) -> dict:
     )
     return {"download_url": url, "expires_in_seconds": expires,
             "note": "Anyone possessing this temporary URL can download the private object."}
+
+
+def register(mcp):
+    """Expose storage management through the same ChatGPT MCP connection."""
+    @mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True})
+    def b2_storage_status() -> dict:
+        """Check whether Backblaze B2 is configured on Render, verify bucket access, and view used space versus the 9 GB Apktool ceiling."""
+        return status()
+
+    @mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True})
+    def b2_list_saved(limit: int = 50, kind: str = "") -> dict:
+        """List persistent APKs, outputs, and saved decoded-project snapshots; call after Render wakes to discover older work."""
+        return list_saved(limit, kind)
+
+    @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True})
+    def b2_save_work_file(file_path: str, kind: str = "outputs") -> dict:
+        """Save a local APKTool workspace file persistently in Backblaze B2. Valid kinds: originals or outputs. Returns an object_key for later retrieval."""
+        if kind not in ("originals", "outputs"):
+            raise ValueError("kind must be originals or outputs")
+        return save_file(file_path, kind)
+
+    @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True})
+    def b2_restore_work_file(object_key: str) -> dict:
+        """Restore a previously saved original or built APK from B2 into Render's temporary workspace; returns a new local file path."""
+        return restore_file(object_key)
+
+    @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True})
+    def b2_save_project_snapshot(project_dir: str) -> dict:
+        """Save an edited/decompiled APKTool project as a compressed B2 snapshot. Call after changes and before Render's idle sleep to preserve work."""
+        return save_project(project_dir)
+
+    @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True})
+    def b2_restore_project_snapshot(object_key: str) -> dict:
+        """Restore a saved project from B2, after Render restarts or sleeps, so editing and rebuild can continue with its returned project_dir."""
+        return restore_project(object_key)
+
+    @mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True})
+    def b2_get_saved_download_link(object_key: str) -> dict:
+        """Create a one-hour HTTPS download link for a file in your private Backblaze B2 bucket; bypasses Render's ephemeral filesystem."""
+        return presigned_download(object_key)
