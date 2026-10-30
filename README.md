@@ -1,3 +1,37 @@
+# APKTool MCP — Render-hosted
+
+Hosted FastMCP adapter for [zinja-coder/apktool-mcp-server](https://github.com/zinja-coder/apktool-mcp-server).
+
+## Active deployment
+
+Render free web service: [apktool-mcp-giraffe](https://dashboard.render.com/web/srv-dbiggaek1f9s73d4fbrg). The live service URL is `https://apktool-mcp-giraffe.onrender.com`.
+
+The remote MCP endpoint is `https://apktool-mcp-giraffe.onrender.com/private/<MCP_PATH_TOKEN>/mcp`. The private token is stored in the Render environment and must not be committed to this public repository. ChatGPT plugin authentication is set to No authentication because access is controlled by the private URL path.
+
+### Direct ChatGPT attachment support
+
+1. Attach an APK file in a ChatGPT conversation that has this custom MCP plugin enabled.
+2. Ask ChatGPT to call `import_apk_attachment` with the attachment. The tool uses OpenAI `_meta["openai/fileParams"]` and a temporary signed file URL.
+3. Pass the returned `apk_path` to `decode_apk`; inspect and modify as needed, then call `build_apk`.
+4. Pass the rebuilt output path to `get_apk_download_link`. The server returns a short-lived HTTPS download URL.
+
+File imports are limited to 120 MiB and validated as APK archives. All workspaces and URLs for built APK downloads are ephemeral. Render free services sleep after approximately **15 minutes of inactivity**, destroying temporary files. To wake, visit `https://apktool-mcp-giraffe.onrender.com/health` and re-import the APK if needed.
+
+**Connection note:** Existing ChatGPT custom plugin installations might need a tool refresh or reconnect to discover the newly added attachment and download tools. A successful MCP tool-list response verifies the backend, not ChatGPT's client-side attachment forwarding.
+
+### Run on Render
+
+The deployed Python start command is `uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000}`.
+Runtime dependencies are in `requirements.txt`. Render environment variables include `MCP_PATH_TOKEN` (a random secret) and `PUBLIC_BASE_URL` (the HTTPS origin). Do not upload private APKs to a public GitHub repository.
+
+### Credits
+
+Fork-derived adaptation of [zinja-coder/apktool-mcp-server](https://github.com/zinja-coder/apktool-mcp-server), Apache 2.0. The original license is retained in `LICENSE`. Use only for APKs you own or are authorized to analyze.
+
+---
+
+## Historical notes (MCPHosting.io)
+
 # APKTool MCP — hosted adapter
 
 A hosting-ready adaptation of [zinja-coder/apktool-mcp-server](https://github.com/zinja-coder/apktool-mcp-server) for deployment on [MCPHosting.io](https://app.mcphosting.io/) and connection to ChatGPT.
