@@ -19,6 +19,23 @@ ChatGPT attachment imports and temporary artifact downloads are limited to **512
 
 **Connection note:** Existing ChatGPT custom plugin installations might need a tool refresh or reconnect to discover the newly added attachment and download tools. A successful MCP tool-list response verifies the backend, not ChatGPT's client-side attachment forwarding.
 
+### Backblaze B2 persistent storage (optional)
+
+The Render MCP still works without B2. With B2 configured, attachment imports automatically save originals to a **private B2 bucket**, and `get_apk_download_link` saves output files and provides a one-hour private pre-signed download URL. B2 tools also allow saved files and edited project snapshots to be listed and restored after Render sleeps. A snapshot is explicit: after modifying smali/resources, call `b2_save_project_snapshot(project_dir)` before Render sleeps. Restore with `b2_restore_project_snapshot(object_key)`.
+
+Create a **read/write application key restricted to the intended bucket** at Backblaze B2 → Application Keys. Store these environment variables **only in Render → Environment**, never in chat or GitHub:
+
+| Variable | Value |
+| --- | --- |
+| `B2_BUCKET` | Exact private bucket name |
+| `B2_S3_ENDPOINT` | S3 endpoint shown by Backblaze, e.g. `https://s3.us-west-004.backblazeb2.com` |
+| `B2_KEY_ID` | Restricted application **Key ID** |
+| `B2_APPLICATION_KEY` | Restricted application **Application Key** (secret) |
+
+The account's **master key is not S3-compatible**. Set all four fields together and choose **Save, rebuild and deploy** in Render; no MCP URL change is required. Verify with `b2_storage_status` (must report `configured: true`).
+
+The adapter has an **application-side 9 GB soft ceiling** for *current objects stored under* `apktool/` and uses unique keys to avoid normal overwrite-version growth. This is **not an account-wide Backblaze spending cap**, does not count previous object versions or other bucket contents, and cannot guarantee no charges. Configure independent Backblaze Caps & Alerts, keep the bucket private, and set lifecycle rules if needed. A free Render instance has limited RAM/disk and can be suspended for heavy service-originated traffic; persistent B2 storage does not increase processing capacity.
+
 ### Run on Render
 
 The deployed Python start command is `uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000}`.
