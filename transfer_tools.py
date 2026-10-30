@@ -16,7 +16,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import FileResponse, PlainTextResponse
 
-MAX_APK_BYTES = 120 * 1024 * 1024
+MAX_APK_BYTES = 512_000_000  # ChatGPT attachment limit: 512 MB (decimal)
 DOWNLOADS: dict[str, tuple[Path, float]] = {}
 
 
@@ -73,12 +73,12 @@ async def download_attachment(file: ChatGPTFile) -> dict:
                     response.raise_for_status()
                     declared_length = response.headers.get("content-length")
                     if declared_length and int(declared_length) > MAX_APK_BYTES:
-                        raise ValueError("APK exceeds 120 MiB upload limit")
+                        raise ValueError("APK exceeds 512 MB upload limit")
                     with target.open("wb") as out:
                         async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
                             length += len(chunk)
                             if length > MAX_APK_BYTES:
-                                raise ValueError("APK exceeds 120 MiB upload limit")
+                                raise ValueError("APK exceeds 512 MB upload limit")
                             out.write(chunk)
                             sha.update(chunk)
                     break
@@ -111,7 +111,7 @@ def publish_artifact(file_path: str) -> dict:
     if not path.is_file():
         raise ValueError("File is missing; Render may have slept or restarted")
     if not 0 < path.stat().st_size <= MAX_APK_BYTES:
-        raise ValueError("Output file is empty or larger than 120 MiB")
+        raise ValueError("Output file is empty or larger than 512 MB")
     for token, (_, expires) in list(DOWNLOADS.items()):
         if expires < time.time():
             DOWNLOADS.pop(token, None)
