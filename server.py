@@ -31,8 +31,10 @@ def prepare_runtime() -> None:
 prepare_runtime()
 from apktool_mcp_server import mcp  # noqa: E402
 from transfer_tools import register, serve_artifact  # noqa: E402
+from storage_b2 import register as register_b2_storage  # noqa: E402
 
 register(mcp)
+register_b2_storage(mcp)
 
 access_token = os.environ.get("MCP_PATH_TOKEN", "")
 if len(access_token) < 24 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in access_token):
