@@ -1,13 +1,16 @@
-"""HTTP/ASGI entrypoint for the upstream APKTool MCP server.
+"""MCPHosting auto-discovery entry point.
 
-For MCPHosting: auto-discovery can import mcp or app from this module.
-For a normal process host: python server.py starts Streamable HTTP at /mcp.
+Expose ONE FastMCP instance. The hosting provider owns the HTTP listener
+and chooses its port; never start a second Uvicorn/FastMCP server here.
+
+For local testing: fastmcp run server.py --transport http --port 8000
 """
 import os
 import shutil
 import stat
 import tempfile
 from pathlib import Path
+
 
 def prepare_runtime() -> None:
     bin_dir = Path(tempfile.gettempdir()) / "apktool-mcp-bin"
@@ -19,10 +22,6 @@ def prepare_runtime() -> None:
     os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
     os.environ.setdefault("APKTOOL_WORKSPACE", str(Path(tempfile.gettempdir()) / "apktool-mcp-workspace"))
 
+
 prepare_runtime()
 from apktool_mcp_server import mcp  # noqa: E402
-
-app = mcp.http_app()
-
-if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
