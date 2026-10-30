@@ -15,9 +15,9 @@ Sign in at https://app.mcphosting.io/ and select **Projects → New project**.
 | Public GitHub URL | `https://github.com/stupidgiraffe/apktool-mcp-hosted` |
 | Branch/tag | `main` |
 
-Click **Deploy**. If the host reports port 3000 already in use, retry without creating a second project; if the conflict persists, it may be an occupied port in the provider's runtime requiring hosting support. If successful, use the dashboard's actual HTTPS `/mcp` endpoint to connect ChatGPT.
+Click **Deploy**. The hosted entrypoint now exposes only the FastMCP `mcp` object and lets the provider manage the HTTP listener; it must not start a second process on port 3000. If `EADDRINUSE` persists after this commit, check provider logs or contact their support. If successful, use the dashboard's actual HTTPS `/mcp` endpoint to connect ChatGPT.
 
-Use the single hosting entrypoint `server.py`, which exposes `mcp` (FastMCP) and `app` (ASGI). If the host requires a process start command, use `python server.py`. It serves Streamable HTTP at `/mcp` on `0.0.0.0`, using the `PORT` environment variable or port 8000.
+Use the single auto-discovery entrypoint `server.py`, which exports `mcp` (FastMCP). MCPHosting must start the HTTP listener itself. For local standalone development use `fastmcp run server.py --transport http --port 8000`. Running `python server.py` intentionally does not start a listener.
 
 ## Runtime
 
