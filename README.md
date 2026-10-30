@@ -15,7 +15,7 @@ The remote MCP endpoint is `https://apktool-mcp-giraffe.onrender.com/private/<MC
 3. Pass the returned `apk_path` to `decode_apk`; inspect and modify as needed, then call `build_apk`.
 4. Pass the rebuilt output path to `get_apk_download_link`. The server returns a short-lived HTTPS download URL.
 
-File imports are limited to 120 MiB and validated as APK archives. All workspaces and URLs for built APK downloads are ephemeral. Render free services sleep after approximately **15 minutes of inactivity**, destroying temporary files. To wake, visit `https://apktool-mcp-giraffe.onrender.com/health` and re-import the APK if needed.
+ChatGPT attachment imports and temporary artifact downloads are limited to **512 MB** (matching ChatGPT's documented per-file limit). The server streams files to disk to avoid holding the entire APK in RAM; large decodes can still run out of memory on the free Render instance (512 MB RAM). Uploaded files are validated as APK archives. All workspaces and URLs for built APK downloads are ephemeral. Render free services sleep after approximately **15 minutes of inactivity**, destroying temporary files. To wake, visit `https://apktool-mcp-giraffe.onrender.com/health` and re-import the APK if needed.
 
 **Connection note:** Existing ChatGPT custom plugin installations might need a tool refresh or reconnect to discover the newly added attachment and download tools. A successful MCP tool-list response verifies the backend, not ChatGPT's client-side attachment forwarding.
 
