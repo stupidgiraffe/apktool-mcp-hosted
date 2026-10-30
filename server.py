@@ -1,15 +1,17 @@
-"""MCPHosting auto-discovery entry point.
+"""Render deployment entrypoint for the Apktool MCP server.
 
-Expose ONE FastMCP instance. The hosting provider owns the HTTP listener
-and chooses its port; never start a second Uvicorn/FastMCP server here.
-
-For local testing: fastmcp run server.py --transport http --port 8000
+The private MCP URL contains a random path component stored only in Render's
+MCP_PATH_TOKEN environment variable. This is a capability URL, not OAuth.
 """
 import os
 import shutil
 import stat
 import tempfile
 from pathlib import Path
+
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Mount, Route
 
 
 def prepare_runtime() -> None:
@@ -20,8 +22,31 @@ def prepare_runtime() -> None:
     shutil.copyfile(source, launcher)
     launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
-    os.environ.setdefault("APKTOOL_WORKSPACE", str(Path(tempfile.gettempdir()) / "apktool-mcp-workspace"))
+    os.environ.setdefault(
+        "APKTOOL_WORKSPACE",
+        str(Path(tempfile.gettempdir()) / "apktool-mcp-workspace"),
+    )
 
 
 prepare_runtime()
 from apktool_mcp_server import mcp  # noqa: E402
+
+access_token = os.environ.get("MCP_PATH_TOKEN", "")
+if len(access_token) < 24 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in access_token):
+    raise RuntimeError("MCP_PATH_TOKEN must be set to a random URL-safe token of at least 24 characters")
+
+mcp_app = mcp.http_app(path="/mcp")
+
+
+async def health(request):
+    return PlainTextResponse("ready")
+
+
+app = Starlette(
+    routes=[
+        Route("/", endpoint=health, methods=["GET"]),
+        Route("/health", endpoint=health, methods=["GET"]),
+        Mount("/private/" + access_token, app=mcp_app),
+    ],
+    lifespan=mcp_app.lifespan,
+)
