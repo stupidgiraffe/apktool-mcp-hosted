@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+import storage_b2
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import FileResponse, PlainTextResponse
 
@@ -89,15 +90,24 @@ async def download_attachment(file: ChatGPTFile) -> dict:
         with zipfile.ZipFile(target) as apk:
             if "AndroidManifest.xml" not in apk.namelist():
                 raise ValueError("Missing AndroidManifest.xml; not a valid APK")
-        return {
+        result = {
             "success": True,
             "apk_path": str(target),
             "file_name": file.file_name or target.name,
             "size_bytes": length,
             "sha256": sha.hexdigest(),
             "next_step": "Call decode_apk with apk_path set to the returned apk_path.",
-            "storage": "Ephemeral: lost on Render sleep, restart, or redeploy.",
+            "storage": "Ephemeral until B2 credentials are configured.",
         }
+        if storage_b2.enabled():
+            try:
+                import asyncio
+                record = await asyncio.to_thread(storage_b2.save_file, str(target), "originals")
+                result["b2_object_key"] = record["object_key"]
+                result["storage"] = "Backed up persistently to private Backblaze B2."
+            except Exception as exc:
+                result["storage_warning"] = f"Backblaze backup failed; this file is local only: {exc}"
+        return result
     except Exception:
         target.unlink(missing_ok=True)
         raise
@@ -155,4 +165,16 @@ def register(mcp):
     )
     def get_apk_download_link(file_path: str) -> dict:
         """Get a temporary HTTPS download link for an APK rebuilt by build_apk or an output report saved in the APKTool workspace. Use this to return the finished file to the user."""
+        if storage_b2.enabled():
+            try:
+                stored = storage_b2.save_file(file_path, "outputs")
+                result = storage_b2.presigned_download(stored["object_key"])
+                result.update({"success": True, "storage": "Backblaze B2",
+                               "b2_object_key": stored["object_key"],
+                               "file_name": Path(file_path).name})
+                return result
+            except Exception as exc:
+                fallback = publish_artifact(file_path)
+                fallback["storage_warning"] = f"B2 save failed; temporary Render link only: {exc}"
+                return fallback
         return publish_artifact(file_path)
