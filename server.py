@@ -30,6 +30,9 @@ def prepare_runtime() -> None:
 
 prepare_runtime()
 from apktool_mcp_server import mcp  # noqa: E402
+from transfer_tools import register, serve_artifact  # noqa: E402
+
+register(mcp)
 
 access_token = os.environ.get("MCP_PATH_TOKEN", "")
 if len(access_token) < 24 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in access_token):
@@ -46,6 +49,7 @@ app = Starlette(
     routes=[
         Route("/", endpoint=health, methods=["GET"]),
         Route("/health", endpoint=health, methods=["GET"]),
+        Route("/private/" + access_token + "/downloads/{artifact_id}", endpoint=serve_artifact, methods=["GET"]),
         Mount("/private/" + access_token, app=mcp_app),
     ],
     lifespan=mcp_app.lifespan,
