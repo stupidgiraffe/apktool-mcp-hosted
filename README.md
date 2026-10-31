@@ -21,7 +21,7 @@ ChatGPT attachment imports and temporary artifact downloads are limited to **512
 
 ### Backblaze B2 persistent storage (optional)
 
-The Render MCP still works without B2. With B2 configured, attachment imports automatically save originals to a **private B2 bucket**, and `get_apk_download_link` saves output files and provides a one-hour private pre-signed download URL. B2 tools also allow saved files and edited project snapshots to be listed and restored after Render sleeps. A snapshot is explicit: after modifying smali/resources, call `b2_save_project_snapshot(project_dir)` before Render sleeps. Restore with `b2_restore_project_snapshot(object_key)`.
+The Render MCP still works without B2. With B2 configured, attachment imports automatically save originals to a **private B2 bucket**, and `get_apk_download_link` saves output files and provides a one-hour private pre-signed download URL. B2 tools also allow saved files and edited project snapshots to be listed and restored after Render sleeps. A snapshot is explicit: after modifying smali/resources, call `b2_save_project_snapshot(project_dir)` before Render sleeps. Restore with `b2_restore_project_snapshot(object_key)`. Use `b2_delete_saved_object(object_key)` to permanently remove an artifact and its stored versions when you no longer need it.
 
 Create a **read/write application key restricted to the intended bucket** at Backblaze B2 → Application Keys. Store these environment variables **only in Render → Environment**, never in chat or GitHub:
 
