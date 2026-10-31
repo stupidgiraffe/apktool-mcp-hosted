@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import boto3
 from boto3.s3.transfer import TransferConfig
@@ -41,10 +42,20 @@ def settings():
     absent = [k for k in names if not os.environ.get(k)]
     if absent:
         raise RuntimeError("B2 not configured; set these Render environment variables: " + ", ".join(absent))
-    endpoint = os.environ["B2_S3_ENDPOINT"].rstrip("/")
-    m = re.fullmatch(r"https://s3\.([a-z0-9-]+)\.backblazeb2\.com", endpoint)
-    if not m:
-        raise ValueError("B2_S3_ENDPOINT must look like https://s3.us-west-004.backblazeb2.com")
+    raw_endpoint = os.environ["B2_S3_ENDPOINT"].strip().strip("'\"")
+    # Accept values copied from Backblaze with no scheme, trailing slash, or a bucket path.
+    if not raw_endpoint.startswith(("https://", "http://")):
+        raw_endpoint = "https://" + raw_endpoint
+    parsed = urlsplit(raw_endpoint)
+    hostname = (parsed.hostname or "").lower()
+    m = re.fullmatch(r"s3\.([a-z0-9-]+)\.backblazeb2\.com", hostname)
+    if not m or parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise ValueError(
+            "B2_S3_ENDPOINT must be an S3 endpoint such as "
+            "https://s3.us-west-004.backblazeb2.com; "
+            f"received hostname={hostname!r}. Use the S3 Endpoint field from your bucket."
+        )
+    endpoint = "https://" + hostname
     bucket = os.environ["B2_BUCKET"]
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]", bucket):
         raise ValueError("Invalid B2 bucket name")
