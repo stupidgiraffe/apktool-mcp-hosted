@@ -245,6 +245,28 @@ def presigned_download(key: str, expires: int = 3600) -> dict:
             "note": "Anyone possessing this temporary URL can download the private object."}
 
 
+
+def delete_saved(key: str) -> dict:
+    """Permanently remove exactly one saved key, including old B2 object versions.
+
+    Deleting the current version alone can leave billable hidden versions.
+    """
+    key = _safe_key(key)
+    s3 = client()
+    bucket, _, _ = settings()
+    versions = []
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=key):
+        for field in ("Versions", "DeleteMarkers"):
+            for entry in page.get(field, []):
+                if entry["Key"] == key:
+                    versions.append(entry["VersionId"])
+    for version in versions:
+        s3.delete_object(Bucket=bucket, Key=key, VersionId=version)
+    return {"deleted": bool(versions), "object_key": key,
+            "versions_removed": len(versions),
+            "note": "All listed versions for the exact object key were removed."}
+
+
 def register(mcp):
     """Expose storage management through the same ChatGPT MCP connection."""
     @mcp.tool(annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True})
@@ -283,3 +305,8 @@ def register(mcp):
     def b2_get_saved_download_link(object_key: str) -> dict:
         """Create a one-hour HTTPS download link for a file in your private Backblaze B2 bucket; bypasses Render's ephemeral filesystem."""
         return presigned_download(object_key)
+
+    @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True})
+    def b2_delete_saved_object(object_key: str) -> dict:
+        """Permanently delete one saved Backblaze object and all of its versions to reclaim storage. This is irreversible; only use when the user requests deletion or cleaning up a test object."""
+        return delete_saved(object_key)
