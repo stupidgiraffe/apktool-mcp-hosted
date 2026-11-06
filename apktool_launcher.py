@@ -2,7 +2,6 @@
 """Lazy, integrity-checked Apktool launcher for Python-only MCP hosting."""
 import hashlib
 import os
-import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -44,7 +43,11 @@ def main() -> None:
         from jdk4py import JAVA
         java = os.environ.get("APKTOOL_JAVA", str(JAVA))
         jar = load_jar()
-        raise SystemExit(subprocess.call([java, "-jar", str(jar), *sys.argv[1:]]))
+        # Replace the launcher process so a subprocess timeout terminates Java itself.
+        # Cap heap below Render Free's 512 MiB container limit; Python and JVM
+        # native/metaspace allocations need headroom too.
+        heap_mb = int(os.environ.get("APKTOOL_JAVA_HEAP_MB", "256"))
+        os.execv(java, [java, f"-Xmx{heap_mb}m", "-jar", str(jar), *sys.argv[1:]])
     except Exception as exc:
         print(f"apktool bootstrap error: {exc}", file=sys.stderr)
         raise SystemExit(1)
